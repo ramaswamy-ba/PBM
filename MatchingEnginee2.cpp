@@ -16,8 +16,7 @@
 *
 * Note:
 *   This code is built with C++20 enabled, using the MS Visual Studio compiler.
-*   For readability and sharability I have placed all code in a single file,  MatchingEnginee2.cpp
-*   removed all test cases while sharing the code
+*   For readability I have placed all code in a single file,  MatchingEnginee2.cpp
 */
 
 #include <iostream>
@@ -68,8 +67,8 @@ struct Order
 	uint64_t id = 0;
 	std::string id_str;
 	uint64_t executed_qty=0;
-	Order(uint64_t inst, std::string ids, char s, uint64_t q, PriceType p)
-		:instr(inst), id(get_numeric(ids)), qty(q), side(s), price(p), id_str(ids)
+	Order(uint64_t inst, std::string ids, char s, uint64_t q, PriceType p,uint64_t e_q)
+		:instr(inst), id(get_numeric(ids)), qty(q), side(s), price(p), id_str(ids), executed_qty(e_q)
 	{}
 	uint64_t getQty() const { return qty - executed_qty; }
 	friend std::ostream& operator <<(std::ostream& out, const Order& o);
@@ -91,15 +90,23 @@ struct Level
 	std::deque<std::reference_wrapper<Order>> orders;
 	Level(PriceType p) : price(p) { }
 	Level() :price(0) { }
-	void removeFromLevel(const Order& o)
-	{
-		auto ite = std::find_if(orders.begin(), orders.end(), [&o](const Order& other) { return o.id == other.id; });
-		if (ite != orders.end())
-			orders.erase(ite);
-	}
+
 	void addToLevel(Order& o)
 	{
 		orders.push_back(std::ref(o));
+	}
+	void moveToEnd(Order& o)
+	{
+		if (!orders.empty() && orders.rbegin()->get().id == o.id) // already in the end
+			return;
+
+		if (auto ite= std::find_if(orders.begin(), orders.end(), [&o](const Order& other) { return o.id == other.id; }); ite != orders.end() )
+			std::rotate(ite, ite + 1, orders.end());
+	}
+	void removeFromLevel(const Order& o)
+	{
+		if (auto ite = std::find_if(orders.begin(), orders.end(), [&o](const Order& other) { return o.id == other.id; }); ite != orders.end() )
+			orders.erase(ite);
 	}
 };
 
@@ -116,7 +123,7 @@ private:
 	DepthType& getDepth(char side) { return side == 'B' ? m_BuyDepth : m_SellDepth; }
 	auto findOrder(const std::string& orderid);
 	auto removeFromDepth(DepthType& depth, PriceType price, Order& order);
-	auto moveToEnd(DepthType& depth, PriceType price, Order& order);
+	auto moveToEndInDepth(DepthType& depth, PriceType price, Order& order);
 public:
 	uint64_t m_ticker = 0;
 	Instrument(uint64_t t) : m_ticker(t), m_BuyDepth(false), m_SellDepth(true) { /*std::cout << "Inst:" << m_ticker << " created\n";*/ }
@@ -148,12 +155,10 @@ auto Instrument::removeFromDepth(DepthType& depth, PriceType price, Order& ord)
 	}
 }
 
-auto Instrument::moveToEnd(DepthType& depth, PriceType price, Order& order)
+auto Instrument::moveToEndInDepth(DepthType& depth, PriceType price, Order& order)
 {
-	if (auto depth_ite = depth.find(ord.price); depth_ite != depth.end() && std::next(depth_ite) != depth.end() /* element alredy last in the queue*/)
-	{
-		std::rotate(depth_ite, depth_ite + 1, depth.end());
-	}
+	if (auto depth_ite = depth.find(order.price); depth_ite != depth.end() )
+		depth_ite->second.moveToEnd(order);
 }
 
 bool Instrument::addOrder(uint64_t ticker, const std::string& orderid, char side, uint64_t quantity, PriceType price)
@@ -166,7 +171,7 @@ bool Instrument::addOrder(uint64_t ticker, const std::string& orderid, char side
 	if (quantity <= 0) // new order fully executed;
 		return true;
 
-	auto res = m_orders.emplace(std::piecewise_construct, std::forward_as_tuple(numeric_orderid), std::forward_as_tuple(ticker, orderid, side, quantity, price));
+	auto res = m_orders.emplace(std::piecewise_construct, std::forward_as_tuple(numeric_orderid), std::forward_as_tuple(ticker, orderid, side, quantity, price, exec_qty));
 	getDepth(side)[price].addToLevel(res.first->second);
 
 	return true;
@@ -187,9 +192,9 @@ bool Instrument::modOrder(uint64_t ticker, const std::string& orderid, char side
 	}
 	ord.qty = quantity;
 	quantity = ord.getQty();
+	auto& depth = getDepth(side);
 	if (are_not_equal(price, ord.price)) // depth level change to price change
 	{
-		auto &depth = getDepth(side);
 		removeFromDepth(depth, ord.price, ord);
 
 		ord.price = price;
@@ -203,7 +208,7 @@ bool Instrument::modOrder(uint64_t ticker, const std::string& orderid, char side
 	}
 	else //only quantity changed, so execution priority changed, so move to end
 	{
-		moveToEnd(depth, ord.price, ord);
+		moveToEndInDepth(depth, ord.price, ord);
 	}
 
 	return true;
