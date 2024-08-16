@@ -1,24 +1,25 @@
 /*
 * Assumption:
-*	order id is unique across all order messages
-*	ticker symbol are integer number only
+*   order id is unique across all order messages
+*   ticker symbol are integer number only
 *   provided input data with correct messages, not corrupted messages or varied character messages
 *   in amend both price and size can be modified
 * Decisions:
-*	I didn't use the boost::multi_index container. It could have made my code simpler.
-*	In the past I observed it has performance issues. So only STL provided containers.
+*   I didn't use the boost::multi_index container. It could have made my code simpler.
+*   In the past I observed it has performance issues. So only STL provided containers.
 *   prices are double, precision compare to 6 decimal places - epsilon_value = 1e-6;
 *
 * Improvement:
-*   if orders numbers are increasing order guaranteed, we can do binary search in depth level while searching orders
 *   if we know the number of decimal places in the price, we can convert to integer, can do integer operations,
-*	which are faster than floating point operation
+*   which are faster than floating point operation
 *   We can use flat_map in C++23
 *
 * Note:
-*	This code is built with C++20 enabled, using the MS Visual Studio compiler.
-*   For readability I have placed all code in a single file,  MatchingEnginee2.cpp
+*   This code is built with C++20 enabled, using the MS Visual Studio compiler.
+*   For readability and sharability I have placed all code in a single file,  MatchingEnginee2.cpp
+*   removed all test cases while sharing the code
 */
+
 #include <iostream>
 #include <utility>
 #include <deque>
@@ -54,7 +55,6 @@ namespace util
 		std::bind(greater_than_equal, std::placeholders::_1, std::placeholders::_2),
 		std::bind(less_than_equal,    std::placeholders::_1, std::placeholders::_2)
 	};
-
 };
 //uint64_t get_numeric(const std::string& str) { return std::hash<std::string>{}(str); }
 uint64_t get_numeric( std::string str) { str.erase(0, 1);  return std::stoll(str); }
@@ -116,6 +116,7 @@ private:
 	DepthType& getDepth(char side) { return side == 'B' ? m_BuyDepth : m_SellDepth; }
 	auto findOrder(const std::string& orderid);
 	auto removeFromDepth(DepthType& depth, PriceType price, Order& order);
+	auto moveToEnd(DepthType& depth, PriceType price, Order& order);
 public:
 	uint64_t m_ticker = 0;
 	Instrument(uint64_t t) : m_ticker(t), m_BuyDepth(false), m_SellDepth(true) { /*std::cout << "Inst:" << m_ticker << " created\n";*/ }
@@ -146,6 +147,15 @@ auto Instrument::removeFromDepth(DepthType& depth, PriceType price, Order& ord)
 			depth.erase(depth_ite);
 	}
 }
+
+auto Instrument::moveToEnd(DepthType& depth, PriceType price, Order& order)
+{
+	if (auto depth_ite = depth.find(ord.price); depth_ite != depth.end() && std::next(depth_ite) != depth.end() /* element alredy last in the queue*/)
+	{
+		std::rotate(depth_ite, depth_ite + 1, depth.end());
+	}
+}
+
 bool Instrument::addOrder(uint64_t ticker, const std::string& orderid, char side, uint64_t quantity, PriceType price)
 {
 	auto numeric_orderid = get_numeric(orderid);
@@ -185,11 +195,15 @@ bool Instrument::modOrder(uint64_t ticker, const std::string& orderid, char side
 		ord.price = price;
 		auto exec_qty = matchBook(ticker, orderid, side, quantity, price);
 		quantity -= exec_qty;
-		ord.executed_qty = exec_qty;
+		ord.executed_qty += exec_qty;
 		if (quantity <= 0) // on mod, order fully executed
 			m_orders.erase(res.second);
 		else
 			depth[ord.price].addToLevel(ord);
+	}
+	else //only quantity changed, so execution priority changed, so move to end
+	{
+		moveToEnd(depth, ord.price, ord);
 	}
 
 	return true;
